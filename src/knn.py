@@ -1,37 +1,10 @@
 import json
-from typing import Callable, Generator, List, Iterable
-import math
+from typing import Any, Callable, List, Generator
 import numpy as np
 import gensim
 import time
 from tqdm import tqdm
-
-from itertools import islice
-from utils import generate_es_results
-
-
-def m_equal_batches(N: int, m: int) -> Generator[int, int, int]:
-    """Divide iterable of size N into m equally sized batches. Yield start and end indices of each batch
-
-    :param int N: Size of the iterable
-    :param int m: Number of batches
-    :yield: Start and end indices of each batch
-    """
-    split = math.ceil(N / m)
-    for i in range(m):
-        yield (i * split, min(split + (i * split), N))
-
-
-def batches_of_m(N: int, m: int) -> Generator[int, int, int]:
-    """Divide iterable of size N into batches of size m. Yield start and end indices of each batch.
-
-    :param int N: Size of the iterable
-    :param int m: Size of the batches
-    :yield: Start and end indices of each batch
-    """
-    number_of_batches = math.ceil(N / m)
-    for i in range(number_of_batches):
-        yield (i * m, min(m + (i * m), N))
+from utils import batches_of_m, create_lookup_func, batching_function
 
 
 def cosine_similarities(a: np.array, B: np.array) -> np.array:
@@ -158,102 +131,51 @@ def knn_batched(
     return all_annotations
 
 
-def batching_function(iterable: Iterable, n: int):
-    """Batch data into tuples of length n. The last batch will be a remainder if not dividable."""
-    if n < 1:
-        raise ValueError("Batch size smaller than one specified")
-    it = iter(iterable)
-    while batch := tuple(islice(it, n)):
-        yield batch
-
-
-def create_lookup_func(labels: List[str]):
-    """Lookup function to go from index to label string"""
-
-    def lookup_func_gen(i):
-        """Return the ith label"""
-        return labels[i]
-
-    return lookup_func_gen
-
-
 def knn_generator(
-    annotated_query: dict,
-    unannotated_query: dict,
-    es_client: Elasticsearch,
-    index: str,
-    size: int,
-    annotation_field: str,
+    query_generator: Generator[Any, Any, Any],
+    labeled_generator: Generator[Any, np.array, str],
     batch_size: int,
-    model: gensim.models.doc2vec.Doc2Vec,
     k: int,
 ):
     """
-    Compute the labels of the  k nearest neighbors in comparison_vectors for all document vectors in docs.
-    Comparison vectors are obtained by the annotated_query in ES and the unannotated documents by the
-    unannotated_query in ES.
+    Compute the labels of the  k nearest neighbors in comparison_vectors for all query vectors.
 
-    We loop over the annotated_documents and for each unannotated vector we keep a top-K nearest neighbors of
-    annotated documents. This way we do not need to keep a score for all annotated documents in memory.
-
-    We use the ES query to obtain the documents in a generator in generate_es_results (this returns
-    vectorized docs) then we use batching_function to create a batch of vectorized documents.
-    Then we compute the scores for a batched manner  and only keep track of the top-k neighbors.
-
+    We loop over the labeled vectors and for each quert vector vector we keep a top-K nearest neighbors of
+    labeled. This way we do not need to keep a score for all annotated documents in memory.
     Based upon Luuk's code.
 
     Returns list of predicted label per document.
 
-    :param annotated_query: valid elasticsearch query to obtain all annotated documents
-    :param unannotated_query: valid elasticsearch query to obtain all unannotated documents
-    :param es_client: elasticsearch connectin client
-    :param index: name of the elasticsearch index
-    :param size: elasticsearch scan size
-    :param annotation_field: name of the field that is going to be annotated
+    :param query_generator: Generator that yields query vectors
+    :param labeled_generator: Generator that yields labeled vectors and their labels
     :param batch_size: the batch size to loop over the data
-    :param model: gensim trained doc2vec model
     :param k: number of the k-nearest neighbors
     """
 
-    # Get annotated documents
-    gen_comparison_vectors = generate_es_results(
-        es_client, annotated_query, index, size, model, annotation_field
-    )
-    comparison_vectors = batching_function(gen_comparison_vectors, batch_size)
-
+    labeled_vectors_generator = batching_function(labeled_generator, batch_size)
     global_top_scores = []
     global_annotation = []
     org_k = -1
-    for _, (batched_comparison) in enumerate(comparison_vectors):
-        vectors, labels = list(zip(*batched_comparison))
+    for i, (labeled_batched) in enumerate(labeled_vectors_generator):
+        vectors, labels = list(zip(*(labeled_batched)))
         lookup_func = create_lookup_func(labels)
 
         vectors = np.stack(vectors)
 
-        # Get unannotated documents
-        gen_unannotated_vectors = generate_es_results(
-            es_client,
-            unannotated_query,
-            index,
-            size,
-            model,
-            annotation_field,
-            get_label=False,
-        )
-        unannotated_vectors = batching_function(gen_unannotated_vectors, batch_size)
+        query_vectors_generator = batching_function(query_generator, batch_size)
 
         inner_scores = []
         inner_labels = []
-        for _, (batched_unannotated) in enumerate(unannotated_vectors):
-            unannotated_vectors, unannotated_labels = list(zip(*batched_unannotated))
-            unannotated_vectors = np.stack(unannotated_vectors)
-            unannotated_vectors = unannotated_vectors.reshape(
-                -1, unannotated_vectors.shape[-1]
+        for _, (query_batched) in enumerate(query_vectors_generator):
+            query_vectors, query_labels = list(zip(*((query_batched))))
+            query_vectors = np.stack(query_vectors)
+            query_vectors = query_vectors.reshape(
+                -1, query_vectors.shape[-1]
             )
             vectors = vectors.reshape(-1, vectors.shape[-1])
 
             # Get cosine scores for this batch
-            cosines = cosine_similarities_vectorized(unannotated_vectors, vectors)
+            cosines = cosine_similarities_vectorized(query_vectors, vectors)
 
             # In the case due to batching we not have at least top-k candidates
             # change k accordingly
@@ -265,7 +187,6 @@ def knn_generator(
                 diff_k = org_k - k
 
             # Find the indices of top k nearest neighbor for each document, shape: [N_unannotated_docs x K_annotated_docs]
-
             # where N and K are the respective batch sizes
             top_k_indices = np.argpartition(cosines, -k, axis=1)[..., -k::]
 
@@ -381,7 +302,7 @@ def unit_test(N=10**3, k=3, bs=1, compare=False):
     )
     t_delta = time.time() - t_0
 
-    logger.info(f"Completed batched KNN annotation in {t_delta} seconds")
+    print(f"Completed batched KNN annotation in {t_delta} seconds")
 
     if compare:
         t_0 = time.time()
@@ -449,16 +370,3 @@ def integration_test():
     for doc in annotated_docs:
         if doc["title"] == "Happy space situation environment policy economy together.":
             print(doc["annotation_status"])
-
-
-if __name__ == "__main__":
-    # vectorized with bs = 1 reduces to the unvectorized algorithm
-    # unit_test(N=20**3, k=100, bs=1000, compare=True)
-
-    # stress test /w 100k docs, runs in about a minute
-    unit_test(N=10**5, k=50, bs=1000, compare=False)
-
-    # stress test /w 500k docs, runs in about 40 minutes on my machine.
-    # More documents --> more space --> must use lower batch size
-    # bs = 100 seems to be the sweet spot for 500k on my local machine
-    # unit_test(N=math.floor((10**6) / 2), k=50, bs=100, compare=False)
