@@ -1,0 +1,16 @@
+elasticsearch
+flashtext == 2.7
+python_dotenv == 0.13.0
+requests >= 2.24.0, < 3
+tqdm == 4.48.2
+gensim == 4.2.0
+pandas == 1.4.3
+beautifulsoup4 == 4.11.1
+git+ssh://git@ssh.dev.azure.com/v3/YDigital/Y%20bot/Long%20Term%20Memory @main
+rdflib==6.2.0
+jiwer==3.0.3
+python-json-logger==2.0.1
+rapidfuzz==3.3.0
+mlflow
+openai==0.28.1
+pymilvus==2.3.6
