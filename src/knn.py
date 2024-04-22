@@ -1,23 +1,16 @@
 import json
-from typing import Callable, Tuple, List, Iterable
+from typing import Callable, Generator, List, Iterable
 import math
 import numpy as np
 import gensim
 import time
 from tqdm import tqdm
-import logging
 
-from elasticsearch import Elasticsearch
 from itertools import islice
 from utils import generate_es_results
-import logging_config
-from logging.config import dictConfig
-
-dictConfig(logging_config.LOGGING_CONFIG)
-logger = logging.getLogger()
 
 
-def m_equal_batches(N: int, m: int) -> Tuple[int, int]:
+def m_equal_batches(N: int, m: int) -> Generator[int, int, int]:
     """Divide iterable of size N into m equally sized batches. Yield start and end indices of each batch
 
     :param int N: Size of the iterable
@@ -29,7 +22,7 @@ def m_equal_batches(N: int, m: int) -> Tuple[int, int]:
         yield (i * split, min(split + (i * split), N))
 
 
-def batches_of_m(N: int, m: int) -> Tuple[int, int]:
+def batches_of_m(N: int, m: int) -> Generator[int, int, int]:
     """Divide iterable of size N into batches of size m. Yield start and end indices of each batch.
 
     :param int N: Size of the iterable
