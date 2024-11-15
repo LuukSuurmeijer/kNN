@@ -1,8 +1,8 @@
 # Introduction 
 
-This code implements relatively fast cosine similarity computation and kNN classification for large matrices, so I never have to worry about it again.
+This code implements relatively fast cosine similarity computation and kNN classification for large matrices, so I never have to worry about it again. This outperforms GenSim's function for vector comparison. It makes clever use of einsums to speed up computation.
 It's also possible to batch the computations to save space. 
-Vectors are classigied using a kNN majority-vote approach.
+Vectors are classified using a kNN majority-vote approach.
 The main algorithm is implemented in `src/knn.py`.
 
 # Getting Started
